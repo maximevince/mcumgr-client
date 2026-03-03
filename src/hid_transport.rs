@@ -18,8 +18,8 @@ use crate::nmp_hdr::{NmpGroup, NmpHdr, NmpOp};
 use crate::transfer::Transport;
 
 const SMP_HDR_SIZE: usize = 8;
-const REPORT_ID_OUT: u8 = 3;
-const REPORT_ID_IN: u8 = 4;
+const DEFAULT_REPORT_ID_OUT: u8 = 0x01;
+const DEFAULT_REPORT_ID_IN: u8 = 0x01;
 const HID_REPORT_SIZE: usize = 64; // Full USB HID report
 const FRAME_HDR_SIZE: usize = 1;   // Length byte at start of each report
 const PAYLOAD_SIZE: usize = HID_REPORT_SIZE - 1 - FRAME_HDR_SIZE; // 62 bytes (SMP data per report)
@@ -29,6 +29,9 @@ const PAYLOAD_SIZE: usize = HID_REPORT_SIZE - 1 - FRAME_HDR_SIZE; // 62 bytes (S
 pub struct HidSpecs {
     pub vid: u16,
     pub pid: u16,
+    pub interface: Option<i32>,
+    pub report_id_out: u8,
+    pub report_id_in: u8,
     pub timeout_ms: u32,
     pub mtu: usize,
 }
@@ -38,6 +41,9 @@ impl Default for HidSpecs {
         Self {
             vid: 0x0000,
             pid: 0x0000,
+            interface: None,
+            report_id_out: DEFAULT_REPORT_ID_OUT,
+            report_id_in: DEFAULT_REPORT_ID_IN,
             timeout_ms: 5000,
             mtu: 2048,
         }
@@ -52,18 +58,40 @@ pub struct HidTransport {
 }
 
 impl HidTransport {
-    /// Open a HID device by VID/PID.
+    /// Open a HID device by VID/PID, optionally filtering by interface number.
     pub fn new(specs: &HidSpecs) -> Result<Self, Error> {
         let api = HidApi::new().map_err(|e| {
             anyhow::anyhow!("Failed to init HID API: {e}")
         })?;
 
-        let device = api.open(specs.vid, specs.pid).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to open HID device {:04x}:{:04x}: {e}",
-                specs.vid, specs.pid
-            )
-        })?;
+        let device = if let Some(iface) = specs.interface {
+            // Find device matching VID/PID/interface and open by path
+            let dev_info = api.device_list()
+                .find(|d| {
+                    d.vendor_id() == specs.vid
+                        && d.product_id() == specs.pid
+                        && d.interface_number() == iface
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No HID device {:04x}:{:04x} with interface {}",
+                        specs.vid, specs.pid, iface
+                    )
+                })?;
+            dev_info.open_device(&api).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to open HID device {:04x}:{:04x} interface {}: {e}",
+                    specs.vid, specs.pid, iface
+                )
+            })?
+        } else {
+            api.open(specs.vid, specs.pid).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to open HID device {:04x}:{:04x}: {e}",
+                    specs.vid, specs.pid
+                )
+            })?
+        };
 
         device
             .set_blocking_mode(true)
@@ -72,8 +100,9 @@ impl HidTransport {
             })?;
 
         info!(
-            "Opened HID device {:04x}:{:04x}",
-            specs.vid, specs.pid
+            "Opened HID device {:04x}:{:04x}{}",
+            specs.vid, specs.pid,
+            specs.interface.map_or(String::new(), |i| format!(" interface {i}"))
         );
 
         Ok(Self {
@@ -132,7 +161,7 @@ impl HidTransport {
             let chunk = &data[offset..chunk_end];
 
             // Build report: [report_id, length, smp_data..., zero_padding...]
-            let mut report = vec![REPORT_ID_OUT, chunk.len() as u8];
+            let mut report = vec![self.specs.report_id_out, chunk.len() as u8];
             report.extend_from_slice(chunk);
             report.resize(HID_REPORT_SIZE, 0); // zero-pad to full report size
 
@@ -170,7 +199,7 @@ impl HidTransport {
 
             // Linux hidraw: read() may or may not include report ID.
             // If first byte is our IN report ID, strip it.
-            let report_data = if n > 0 && read_buf[0] == REPORT_ID_IN {
+            let report_data = if n > 0 && read_buf[0] == self.specs.report_id_in {
                 &read_buf[1..n]
             } else {
                 &read_buf[..n]

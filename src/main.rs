@@ -18,6 +18,12 @@ fn parse_hex_u16(s: &str) -> Result<u16, String> {
     u16::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {e}"))
 }
 
+#[cfg(feature = "hid")]
+fn parse_hex_u8(s: &str) -> Result<u8, String> {
+    let s = s.strip_prefix("0x").or(s.strip_prefix("0X")).unwrap_or(s);
+    u8::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {e}"))
+}
+
 /// Format bytes to human-readable string
 fn format_bytes(size: u32) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
@@ -88,6 +94,21 @@ struct Cli {
     #[cfg(feature = "hid")]
     #[arg(long, value_parser = parse_hex_u16, requires = "hid")]
     pid: Option<u16>,
+
+    /// USB HID interface number (for devices with multiple HID interfaces)
+    #[cfg(feature = "hid")]
+    #[arg(long, requires = "hid")]
+    interface: Option<i32>,
+
+    /// HID OUT report ID (default: 0x01)
+    #[cfg(feature = "hid")]
+    #[arg(long, value_parser = parse_hex_u8, requires = "hid")]
+    report_id_out: Option<u8>,
+
+    /// HID IN report ID (default: 0x01)
+    #[cfg(feature = "hid")]
+    #[arg(long, value_parser = parse_hex_u8, requires = "hid")]
+    report_id_in: Option<u8>,
 
     #[command(subcommand)]
     command: Commands,
@@ -312,10 +333,17 @@ fn main() {
             let specs = HidSpecs {
                 vid,
                 pid,
+                interface: cli.interface,
+                report_id_out: cli.report_id_out.unwrap_or(0x01),
+                report_id_in: cli.report_id_in.unwrap_or(0x01),
                 timeout_ms: cli.initial_timeout_s * 1000,
                 mtu: cli.mtu,
             };
-            info!("Using HID transport: VID={:04x} PID={:04x}", specs.vid, specs.pid);
+            info!(
+                "Using HID transport: VID={:04x} PID={:04x}{}",
+                specs.vid, specs.pid,
+                specs.interface.map_or(String::new(), |i| format!(" iface={i}"))
+            );
             ConnSpec::Hid(specs)
         }
         #[cfg(not(feature = "hid"))]
