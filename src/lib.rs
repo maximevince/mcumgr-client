@@ -9,6 +9,8 @@ mod stat;
 mod test_serial_port;
 mod transfer;
 mod util;
+#[cfg(feature = "hid")]
+pub mod hid_transport;
 
 pub use crate::default::reset;
 pub use crate::fs::{download as fs_download, hash as fs_hash, stat as fs_stat, upload as fs_upload};

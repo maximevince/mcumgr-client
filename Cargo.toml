@@ -36,3 +36,8 @@ serde_repr = "0.1"
 serialport = {version = "4.2", default-features = false}
 sha2 = "0.10"
 simplelog = "0.12"
+hidapi = { version = "2.6", optional = true, features = ["linux-static-hidraw"] }
+
+[features]
+default = ["hid"]
+hid = ["dep:hidapi"]

@@ -12,6 +12,12 @@ use std::process;
 
 use mcumgr_client::*;
 
+#[cfg(feature = "hid")]
+fn parse_hex_u16(s: &str) -> Result<u16, String> {
+    let s = s.strip_prefix("0x").or(s.strip_prefix("0X")).unwrap_or(s);
+    u16::from_str_radix(s, 16).map_err(|e| format!("Invalid hex: {e}"))
+}
+
 /// Format bytes to human-readable string
 fn format_bytes(size: u32) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
@@ -67,6 +73,21 @@ struct Cli {
     /// baudrate
     #[arg(short, long, default_value_t = 115_200)]
     baudrate: u32,
+
+    /// Use USB HID transport
+    #[cfg(feature = "hid")]
+    #[arg(long)]
+    hid: bool,
+
+    /// USB Vendor ID (hex, e.g., 0x1234) — required with --hid
+    #[cfg(feature = "hid")]
+    #[arg(long, value_parser = parse_hex_u16, requires = "hid")]
+    vid: Option<u16>,
+
+    /// USB Product ID (hex, e.g., 0x5678) — required with --hid
+    #[cfg(feature = "hid")]
+    #[arg(long, value_parser = parse_hex_u16, requires = "hid")]
+    pid: Option<u16>,
 
     #[command(subcommand)]
     command: Commands,
@@ -277,7 +298,31 @@ fn main() {
     .unwrap_or_else(|_| SimpleLogger::init(LevelFilter::Info, Default::default()).unwrap());
 
     // Build transport connection
-    let conn = if cli.is_udp() {
+    #[cfg(feature = "hid")]
+    let use_hid = cli.hid;
+    #[cfg(not(feature = "hid"))]
+    let use_hid = false;
+
+    let conn = if use_hid {
+        #[cfg(feature = "hid")]
+        {
+            use mcumgr_client::hid_transport::HidSpecs;
+            let vid = cli.vid.expect("--vid is required with --hid");
+            let pid = cli.pid.expect("--pid is required with --hid");
+            let specs = HidSpecs {
+                vid,
+                pid,
+                timeout_ms: cli.initial_timeout_s * 1000,
+                mtu: cli.mtu,
+            };
+            info!("Using HID transport: VID={:04x} PID={:04x}", specs.vid, specs.pid);
+            ConnSpec::Hid(specs)
+        }
+        #[cfg(not(feature = "hid"))]
+        {
+            unreachable!()
+        }
+    } else if cli.is_udp() {
         let udp_specs = cli.udp_specs();
         info!("Using UDP transport: {}:{}", udp_specs.host, udp_specs.port);
         ConnSpec::Udp(udp_specs)

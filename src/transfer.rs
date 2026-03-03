@@ -38,11 +38,13 @@ pub trait Transport {
     fn linelength(&self) -> usize;
 }
 
-/// Connection specification - either serial or UDP
+/// Connection specification - serial, UDP, or HID
 #[derive(Debug, Clone)]
 pub enum ConnSpec {
     Serial(SerialSpecs),
     Udp(UdpSpecs),
+    #[cfg(feature = "hid")]
+    Hid(crate::hid_transport::HidSpecs),
 }
 
 impl ConnSpec {
@@ -56,6 +58,12 @@ impl ConnSpec {
         matches!(self, ConnSpec::Serial(_))
     }
 
+    /// Check if this is a HID connection
+    #[cfg(feature = "hid")]
+    pub fn is_hid(&self) -> bool {
+        matches!(self, ConnSpec::Hid(_))
+    }
+
     /// Open a transport connection based on this spec
     pub fn open(&self) -> Result<Box<dyn Transport>, Error> {
         match self {
@@ -65,6 +73,11 @@ impl ConnSpec {
             }
             ConnSpec::Udp(specs) => {
                 let transport = UdpTransport::new(specs)?;
+                Ok(Box::new(transport))
+            }
+            #[cfg(feature = "hid")]
+            ConnSpec::Hid(specs) => {
+                let transport = crate::hid_transport::HidTransport::new(specs)?;
                 Ok(Box::new(transport))
             }
         }
